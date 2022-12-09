@@ -317,6 +317,7 @@ fn build_mapping_recurse(
                         name: Rc::clone(&owner),
                         srcid: Rc::clone(&owner),
                         change_time_offset: u32::MAX,
+                        change_frequency: u32::MAX,
                     });
                 }
 

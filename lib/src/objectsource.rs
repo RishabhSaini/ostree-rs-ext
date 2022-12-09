@@ -51,6 +51,8 @@ pub struct ObjectSourceMeta {
     /// One suggested way to generate this number is to have it be in units of hours or days
     /// since the earliest changed item.
     pub change_time_offset: u32,
+    /// Change frequency
+    pub change_frequency: u32,
 }
 
 impl PartialEq for ObjectSourceMeta {
