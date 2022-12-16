@@ -53,6 +53,8 @@ pub struct ObjectSourceMeta {
     pub change_time_offset: u32,
     /// Change frequency
     pub change_frequency: u32,
+    /// Missing in Bodhi
+    pub missing_bodhi: bool,
 }
 
 impl PartialEq for ObjectSourceMeta {

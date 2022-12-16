@@ -318,6 +318,7 @@ fn build_mapping_recurse(
                         srcid: Rc::clone(&owner),
                         change_time_offset: u32::MAX,
                         change_frequency: u32::MAX,
+                        missing_bodhi: true,
                     });
                 }
 
