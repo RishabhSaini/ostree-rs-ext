@@ -103,7 +103,7 @@ fn export_chunks(
     ociw: &mut OciDir,
     chunks: Vec<Chunk>,
     opts: &ExportOpts,
-) -> Result<Vec<(Layer, String)>> {
+) -> Result<Vec<(Layer, String, Vec<String>)>> {
     chunks
         .into_iter()
         .enumerate()
@@ -112,7 +112,7 @@ fn export_chunks(
             ostree_tar::export_chunk(repo, commit, chunk.content, &mut w)
                 .with_context(|| format!("Exporting chunk {i}"))?;
             let w = w.into_inner()?;
-            Ok((w.complete()?, chunk.name))
+            Ok((w.complete()?, chunk.name, chunk.packages))
         })
         .collect()
 }
@@ -156,10 +156,26 @@ fn export_chunked(
                 .clone();
 
             // Add the ostree layer
-            ociw.push_layer(manifest, imgcfg, ostree_layer, description);
+            let mut annotation_ostree_layer = HashMap::new();
+            annotation_ostree_layer.insert("Content".to_string(), "ostree_commit".to_string());
+            ociw.push_layer(
+                manifest,
+                imgcfg,
+                ostree_layer,
+                description,
+                Some(annotation_ostree_layer),
+            );
             // Add the component/content layers
-            for (layer, name) in layers {
-                ociw.push_layer(manifest, imgcfg, layer, name.as_str());
+            for (layer, name, packages) in layers {
+                let mut annotation_component_layer = HashMap::new();
+                annotation_component_layer.insert("Content".to_string(), packages.join(","));
+                ociw.push_layer(
+                    manifest,
+                    imgcfg,
+                    layer,
+                    name.as_str(),
+                    Some(annotation_component_layer),
+                );
             }
             // This label (mentioned above) points to the last layer that is part of
             // the ostree commit.
