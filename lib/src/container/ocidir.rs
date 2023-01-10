@@ -202,8 +202,8 @@ impl OciDir {
         config: &mut oci_image::ImageConfiguration,
         layer: Layer,
         description: &str,
+        annotations: Option<HashMap<String, String>>
     ) {
-        let annotations: Option<HashMap<String, String>> = None;
         self.push_layer_annotated(manifest, config, layer, annotations, description);
     }
 

@@ -30,6 +30,7 @@ pub(crate) struct Chunk {
     pub(crate) name: String,
     pub(crate) content: ChunkMapping,
     pub(crate) size: u64,
+    pub(crate) packages: Vec<String>
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -312,6 +313,7 @@ impl Chunking {
                 n => Cow::Owned(format!("{n} components")),
             };
             let mut chunk = Chunk::new(&*name);
+            chunk.packages = bin.iter().map(|v| String::from(&*v.meta.name)).collect();
             for szmeta in bin {
                 for &obj in rmap.get(&szmeta.meta.identifier).unwrap() {
                     self.remainder.move_obj(&mut chunk, obj.as_str());
