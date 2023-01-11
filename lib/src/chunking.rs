@@ -244,10 +244,11 @@ impl Chunking {
         repo: &ostree::Repo,
         rev: &str,
         meta: ObjectMetaSized,
-        max_layers: Option<NonZeroU32>,
+        max_layers: &Option<NonZeroU32>,
+        prior_build_metadata: &Option<Vec<Vec<String>>>
     ) -> Result<Self> {
         let mut r = Self::new(repo, rev)?;
-        r.process_mapping(meta, max_layers)?;
+        r.process_mapping(meta, max_layers, prior_build_metadata)?;
         Ok(r)
     }
 
@@ -261,7 +262,8 @@ impl Chunking {
     pub fn process_mapping(
         &mut self,
         meta: ObjectMetaSized,
-        max_layers: Option<NonZeroU32>,
+        max_layers: &Option<NonZeroU32>,
+        prior_build_metadata: &Option<Vec<Vec<String>>>
     ) -> Result<()> {
         self.max = max_layers
             .unwrap_or(NonZeroU32::new(MAX_CHUNKS).unwrap())
@@ -292,7 +294,7 @@ impl Chunking {
             .unwrap();
 
         // TODO: Compute bin packing in a better way
-        let packing = basic_packing(sizes, NonZeroU32::new(self.max).unwrap());
+        let packing = basic_packing(sizes, NonZeroU32::new(self.max).unwrap(), prior_build_metadata);
 
         for bin in packing.into_iter() {
             let first = bin[0];
@@ -395,7 +397,8 @@ fn sort_packing(packing: &mut [ChunkedComponents]) {
 /// - Take the "tail" (all components past maximum), and group by source package
 /// - If we have fewer components than bins, we're done
 /// - Take the whole tail and group them toether (this is the overly simplistic part)
-fn basic_packing(components: &[ObjectSourceMetaSized], bins: NonZeroU32) -> Vec<ChunkedComponents> {
+fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bins: NonZeroU32, prior_build_metadata: &'a Option<Vec<Vec<String>>>) -> Vec<ChunkedComponents<'a>> {
+    println!("{:#?}", prior_build_metadata); 
     // let total_size: u64 = components.iter().map(|v| v.size).sum();
     // let avg_size: u64 = total_size / components.len() as u64;
     let mut r = Vec::new();
