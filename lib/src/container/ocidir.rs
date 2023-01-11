@@ -531,7 +531,8 @@ mod tests {
         let mut config = oci_image::ImageConfigurationBuilder::default()
             .build()
             .unwrap();
-        w.push_layer(&mut manifest, &mut config, root_layer, "root");
+        let annotations: Option<HashMap<String, String>> = None;
+        w.push_layer(&mut manifest, &mut config, root_layer, "root", annotations);
         let config = w.write_config(config)?;
         manifest.set_config(config);
         w.replace_with_single_manifest(manifest.clone(), oci_image::Platform::default())?;

@@ -232,7 +232,15 @@ fn build_oci(
     let mut manifest = ocidir::new_empty_manifest().build().unwrap();
 
     let chunking = contentmeta
-        .map(|meta| crate::chunking::Chunking::from_mapping(repo, commit, meta, opts.max_layers))
+        .map(|meta| {
+            crate::chunking::Chunking::from_mapping(
+                repo,
+                commit,
+                meta,
+                &opts.max_layers,
+                &opts.prior_build_metadata,
+            )
+        })
         .transpose()?;
     // If no chunking was provided, create a logical single chunk.
     let chunking = chunking
@@ -382,6 +390,8 @@ pub struct ExportOpts {
     // TODO semver-break: remove this
     /// Use only the standard OCI version label
     pub no_legacy_version_label: bool,
+    /// Prevent major change in packaging structure by taking previous builds in order of priority
+    pub prior_build_metadata: Option<Vec<Vec<String>>>,
 }
 
 impl ExportOpts {
