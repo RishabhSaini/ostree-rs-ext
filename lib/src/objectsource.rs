@@ -34,7 +34,7 @@ mod rcstr_serialize {
 pub type ContentID = Rc<str>;
 
 /// Metadata about a component/package.
-#[derive(Debug, Eq, Deserialize, Serialize)]
+#[derive(Debug, Eq, Deserialize, Serialize, Clone)]
 pub struct ObjectSourceMeta {
     /// Unique identifier, does not need to be human readable, but can be.
     #[serde(with = "rcstr_serialize")]

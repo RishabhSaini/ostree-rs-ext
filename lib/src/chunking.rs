@@ -5,6 +5,7 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
@@ -33,7 +34,7 @@ pub(crate) struct Chunk {
     pub(crate) packages: Vec<String>
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// Object metadata, but with additional size data
 pub struct ObjectSourceMetaSized {
     /// The original metadata
@@ -41,6 +42,20 @@ pub struct ObjectSourceMetaSized {
     meta: ObjectSourceMeta,
     /// Total size of associated objects
     size: u64,
+}
+
+impl Hash for ObjectSourceMetaSized {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.meta.identifier.hash(state);
+    }
+}
+
+impl Eq for ObjectSourceMetaSized {}
+
+impl PartialEq for ObjectSourceMetaSized {
+    fn eq(&self, other: &Self) -> bool {
+        self.meta.identifier == other.meta.identifier
+    }
 }
 
 /// Extend content source metadata with sizes.
@@ -388,59 +403,153 @@ fn sort_packing(packing: &mut [ChunkedComponents]) {
     });
 }
 
+fn mean(data: &[u64]) -> Option<f64> {
+    let sum = data.iter().sum::<u64>() as f64;
+    let count = data.len();
+    match count {
+        positive if positive > 0 => Some(sum / count as f64),
+         _ => None,
+    }
+}
+
+fn std_deviation(data: &[u64]) -> Option<f64> {
+    match (mean(data), data.len()) {
+        (Some(data_mean), count) if count > 0 => {
+            let variance = data.iter().map(|value| {
+                let diff = data_mean - (*value as f64);
+                diff * diff
+            }).sum::<f64>() / count as f64;
+            Some(variance.sqrt())
+        },
+        _ => None
+    }
+}
+
+fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, threshold: f64) -> Option<HashMap<String, Vec<&ObjectSourceMetaSized>>>{
+    let frequencies: Vec<u64> = components.iter().map(|a| a.meta.change_frequency.into()).collect();
+    let sizes: Vec<u64> = components.iter().map(|a| a.size).collect();
+    let mean_freq = mean(&frequencies)?;
+    let stddev_freq = std_deviation(&frequencies)?;
+    let mean_size = mean(&sizes)?;
+    let stddev_size = std_deviation(&sizes)?;
+    println!("mean f{}, s{}, stddev f{}, s{}", &mean_freq, &mean_size, &stddev_freq, &stddev_size);
+    let mut bins : HashMap<String, Vec<&ObjectSourceMetaSized>> = HashMap::new(); 
+    for pkg in components {
+        let size = pkg.size as f64;
+        let freq = pkg.meta.change_frequency as f64;
+        
+        //lf_hs
+        if  freq <= mean_freq - threshold*stddev_freq && 
+            size >= mean_size + threshold*stddev_size {
+            bins.entry("lf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //mf_hs
+        else if freq < mean_freq + threshold*stddev_freq && freq > mean_freq - threshold*stddev_freq && 
+                size >= mean_size + threshold*stddev_size {
+            bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //hf_hs
+        else if freq >= mean_freq + threshold*stddev_freq && 
+                size >= mean_size + threshold*stddev_size {
+            bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //lf_ms
+        else if freq <= mean_freq - threshold*stddev_freq && 
+                size < mean_size + threshold*stddev_size && size > mean_size - threshold*stddev_size {
+            bins.entry("lf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //mf_ms
+        else if freq < mean_freq + threshold*stddev_freq && freq > mean_freq - threshold*stddev_freq && 
+                size < mean_size + threshold*stddev_size && size > mean_size - threshold*stddev_size {
+            bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //hf_ms
+        else if freq >= mean_freq + threshold*stddev_freq && 
+                size < mean_size + threshold*stddev_size && size > mean_size - threshold*stddev_size {
+            bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+        
+        //lf_ls
+        else if freq <= mean_freq - threshold*stddev_freq && 
+                size <= mean_size + threshold*stddev_size {
+            bins.entry("lf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //mf_ls
+        else if freq < mean_freq + threshold*stddev_freq && freq > mean_freq - threshold*stddev_freq && 
+                size <= mean_size + threshold*stddev_size {
+            bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+
+        //hf_ls
+        else if freq >= mean_freq + threshold*stddev_freq && 
+                size <= mean_size + threshold*stddev_size {
+            bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        }
+    }
+
+    for (name, pkgs) in &bins {
+        println!("{:#?}: {:#?}", name, pkgs.len());
+    }
+
+    Some(bins)
+}
+
 /// Given a set of components with size metadata (e.g. boxes of a certain size)
 /// and a number of bins (possible container layers) to use, determine which components
 /// go in which bin.  This algorithm is pretty simple:
 ///
-/// - order by size
-/// - If we have fewer components than bins, we're done
-/// - Take the "tail" (all components past maximum), and group by source package
-/// - If we have fewer components than bins, we're done
-/// - Take the whole tail and group them toether (this is the overly simplistic part)
-fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bins: NonZeroU32, prior_build_metadata: &'a Option<Vec<Vec<String>>>) -> Vec<ChunkedComponents<'a>> {
-    println!("{:#?}", prior_build_metadata); 
-    // let total_size: u64 = components.iter().map(|v| v.size).sum();
-    // let avg_size: u64 = total_size / components.len() as u64;
+fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU32, prior_builds_metadata: &'a Option<Vec<Vec<Vec<String>>>>) -> Vec<ChunkedComponents<'a>> {
     let mut r = Vec::new();
-    // And handle the easy case of enough bins for all components
-    // TODO: Possibly try to split off large files?
-    if components.len() <= bins.get() as usize {
-        r.extend(components.iter().map(|v| vec![v]));
-        return r;
-    }
-    // Create a mutable copy
     let mut components: Vec<_> = components.iter().collect();
-    // Iterate over the component tail, folding by source id
-    let mut by_src = HashMap::<_, Vec<&ObjectSourceMetaSized>>::new();
-    // Take the tail off components, then build up mapping from srcid -> Vec<component>
-    for component in components.split_off(bins.get() as usize) {
-        by_src
-            .entry(&component.meta.srcid)
-            .or_default()
-            .push(component);
-    }
-    // Take all the non-tail (largest) components, and append them first
-    r.extend(components.into_iter().map(|v| vec![v]));
-    // Add the tail
-    r.extend(by_src.into_values());
-    // And order the new list
-    sort_packing(&mut r);
-    // It's possible that merging components gave us enough space; if so
-    // we're done!
-    if r.len() <= bins.get() as usize {
-        return r;
-    }
+    components.sort_by(|a, b| a.meta.change_frequency.cmp(&b.meta.change_frequency));
+    assert!(&components[0].meta.change_frequency <= &components[1].meta.change_frequency);
+    println!("Components len before max: {}", &components.len());
+    //Fix removing the freq u32::max comps from components and addding to max_freq_components
+    let mut max_freq_components: Vec<&ObjectSourceMetaSized> = vec!(components[components.len() -1], components[components.len() - 2]); 
+    components.retain(|pkg| pkg.meta.change_frequency != u32::MAX);
+    println!("max_freq len after: {}", &max_freq_components.len());
+    println!("Comp len after: {}", &components.len());
+    let partitions = get_partitions_with_threshold(components, 1.5).expect("Partitioning components into sets");
+    for pkgs in partitions.values() {
+        let max_bin_size: u64 = pkgs.iter().map(|a| a.size).max().unwrap();
+        let mut bin_size = 0;
+        let mut bin : Vec<&ObjectSourceMetaSized> = Vec::new();
+        //Index of pkg in pkgs where the bin begins 
+        let mut bin_start_index = 0;
+        for (i, pkg) in pkgs.iter().enumerate(){
+            let size_pkg = pkg.size;
+            bin_size += size_pkg;
+            bin.push(pkg); 
 
-    let last = (bins.get().checked_sub(1).unwrap()) as usize;
-    // The "tail" is components past our maximum.  For now, we simply group all of that together as a single unit.
-    if let Some(tail) = r.drain(last..).reduce(|mut a, b| {
-        a.extend(b.into_iter());
-        a
-    }) {
-        r.push(tail);
-    }
+            if bin_size > max_bin_size {
+                bin.pop();
+                r.push(bin.clone());
+                bin.clear();
+                bin.push(pkg);
+                bin_size = pkg.size;
+                bin_start_index = i;
+            }
 
-    assert!(r.len() <= bins.get() as usize);
+            else if bin_size == max_bin_size {
+                r.push(bin.clone());
+                bin_size = 0;
+                bin.clear();
+                bin_start_index = i + 1; 
+            }
+
+            if i == pkgs.len() - 1 {
+                r.push(bin.clone());
+            }
+        }
+    }
+    r.push(max_freq_components);
+    assert!(r.len() <= bin_size.get() as usize);
     r
 }
 
