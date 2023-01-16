@@ -39,8 +39,7 @@ pub struct ObjectSourceMeta {
     /// Unique identifier, does not need to be human readable, but can be.
     #[serde(with = "rcstr_serialize")]
     pub identifier: ContentID,
-    /// Identifier for this source (e.g. package name-version, git repo).
-    /// Unlike the [`ContentID`], this should be human readable.
+    /// Just the name of the package (no version), needs to be human readable.
     #[serde(with = "rcstr_serialize")]
     pub name: Rc<str>,
     /// Identifier for the *source* of this content; for example, if multiple binary

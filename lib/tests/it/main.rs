@@ -21,7 +21,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::process::Command;
 use std::time::SystemTime;
 
-use ostree_ext::fixture::{FileDef, Fixture, CONTENTS_CHECKSUM_V0, CONTENTS_V0_LEN};
+use ostree_ext::fixture::{FileDef, Fixture, CONTENTS_CHECKSUM_V0, LAYERS_V0_LEN};
 
 const EXAMPLE_TAR_LAYER: &[u8] = include_bytes!("fixtures/hlinks.tar.gz");
 const TEST_REGISTRY_DEFAULT: &str = "localhost:5000";
@@ -514,7 +514,7 @@ async fn impl_test_container_import_export(chunked: bool) -> Result<()> {
         "/usr/bin/bash"
     );
 
-    let n_chunks = if chunked { *CONTENTS_V0_LEN } else { 1 };
+    let n_chunks = if chunked { LAYERS_V0_LEN } else { 1 };
     assert_eq!(cfg.rootfs().diff_ids().len(), n_chunks);
     assert_eq!(cfg.history().len(), n_chunks);
 
@@ -617,7 +617,7 @@ fn validate_chunked_structure(oci_path: &Utf8Path) -> Result<()> {
     let d = Dir::open_ambient_dir(oci_path, cap_std::ambient_authority())?;
     let d = ocidir::OciDir::open(&d)?;
     let manifest = d.read_manifest()?;
-    assert_eq!(manifest.layers().len(), *CONTENTS_V0_LEN);
+    assert_eq!(manifest.layers().len(), LAYERS_V0_LEN);
     let ostree_layer = manifest.layers().first().unwrap();
     let mut ostree_layer_blob = d
         .read_blob(ostree_layer)
@@ -650,7 +650,7 @@ fn validate_chunked_structure(oci_path: &Utf8Path) -> Result<()> {
 
 #[tokio::test]
 async fn test_container_chunked() -> Result<()> {
-    let nlayers = *CONTENTS_V0_LEN - 1;
+    let nlayers = LAYERS_V0_LEN - 1;
     let mut fixture = Fixture::new_v1()?;
 
     let (imgref, expected_digest) = fixture.export_container().await.unwrap();
@@ -717,8 +717,11 @@ r usr/bin/bash bash-v0
     let (first, second) = (to_fetch[0], to_fetch[1]);
     assert!(first.0.commit.is_none());
     assert!(second.0.commit.is_none());
-    assert_eq!(first.1, "testlink");
-    assert_eq!(second.1, "bash");
+    assert_eq!(
+        first.1,
+        "ostree export of commit 38ab1f9da373a0184b0b48db6e280076ab4b5d4691773475ae24825aae2272d4"
+    );
+    assert_eq!(second.1, "7 components");
 
     assert_eq!(store::list_images(fixture.destrepo()).unwrap().len(), 1);
     let n = store::count_layer_references(fixture.destrepo())? as i64;
@@ -792,7 +795,7 @@ r usr/bin/bash bash-v0
     store::remove_images(fixture.destrepo(), [&derived_imgref.imgref]).unwrap();
     assert_eq!(store::list_images(fixture.destrepo()).unwrap().len(), 0);
     let n_removed = store::gc_image_layers(fixture.destrepo())?;
-    assert_eq!(n_removed, (*CONTENTS_V0_LEN + 1) as u32);
+    assert_eq!(n_removed, (LAYERS_V0_LEN + 1) as u32);
 
     // Repo should be clean now
     assert_eq!(store::count_layer_references(fixture.destrepo())?, 0);

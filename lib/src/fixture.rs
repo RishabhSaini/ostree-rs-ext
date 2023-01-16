@@ -168,7 +168,8 @@ d tmp
 "## };
 pub const CONTENTS_CHECKSUM_V0: &str =
     "5e41de82f9f861fa51e53ce6dd640a260e4fb29b7657f5a3f14157e93d2c0659";
-pub static CONTENTS_V0_LEN: Lazy<usize> = Lazy::new(|| OWNERS.len().checked_sub(1).unwrap());
+// 1 for ostree commit, 2 for max frequency packages, 3 as empty layer
+pub const LAYERS_V0_LEN: usize = 3usize;
 
 #[derive(Debug, PartialEq, Eq)]
 enum SeLabel {
