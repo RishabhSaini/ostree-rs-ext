@@ -432,64 +432,75 @@ fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, thresh
     let stddev_freq = std_deviation(&frequencies)?;
     let mean_size = mean(&sizes)?;
     let stddev_size = std_deviation(&sizes)?;
-    println!("mean f{}, s{}, stddev f{}, s{}", &mean_freq, &mean_size, &stddev_freq, &stddev_size);
-    let mut bins : HashMap<String, Vec<&ObjectSourceMetaSized>> = HashMap::new(); 
+    let mut bins : HashMap<String, Vec<&ObjectSourceMetaSized>> = HashMap::new();
+
+    let mut freq_low_limit = mean_freq - threshold*stddev_freq;
+    if freq_low_limit < 0 as f64 {
+        freq_low_limit = 0 as f64;
+    }
+    let freq_high_limit = mean_freq + threshold*stddev_freq;
+    let mut size_low_limit = mean_size - threshold*stddev_size;
+    if size_low_limit < 0 as f64 {
+        size_low_limit = 0 as f64;
+    }
+    let size_high_limit = mean_size + threshold*stddev_size;
+    
     for pkg in components {
         let size = pkg.size as f64;
         let freq = pkg.meta.change_frequency as f64;
         
         //lf_hs
-        if  freq <= mean_freq - threshold*stddev_freq && 
-            size >= mean_size + threshold*stddev_size {
+        if  (freq <= freq_low_limit) && 
+            (size >= size_high_limit) {
             bins.entry("lf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //mf_hs
-        else if freq < mean_freq + threshold*stddev_freq && freq > mean_freq - threshold*stddev_freq && 
-                size >= mean_size + threshold*stddev_size {
+        else if (freq < freq_high_limit) && (freq > freq_low_limit) && 
+                (size >= size_high_limit) {
             bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //hf_hs
-        else if freq >= mean_freq + threshold*stddev_freq && 
-                size >= mean_size + threshold*stddev_size {
+        else if (freq >= freq_high_limit) && 
+                (size >= size_high_limit) {
             bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //lf_ms
-        else if freq <= mean_freq - threshold*stddev_freq && 
-                size < mean_size + threshold*stddev_size && size > mean_size - threshold*stddev_size {
+        else if (freq <= freq_low_limit) && 
+                (size < size_high_limit) && (size > size_low_limit) {
             bins.entry("lf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //mf_ms
-        else if freq < mean_freq + threshold*stddev_freq && freq > mean_freq - threshold*stddev_freq && 
-                size < mean_size + threshold*stddev_size && size > mean_size - threshold*stddev_size {
-            bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq < freq_high_limit) && (freq > freq_low_limit) && 
+                (size < size_high_limit) && (size > size_low_limit){
+            bins.entry("mf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //hf_ms
-        else if freq >= mean_freq + threshold*stddev_freq && 
-                size < mean_size + threshold*stddev_size && size > mean_size - threshold*stddev_size {
-            bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq >= freq_high_limit) && 
+                (size < size_high_limit) && (size > size_low_limit) {
+            bins.entry("hf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
         
         //lf_ls
-        else if freq <= mean_freq - threshold*stddev_freq && 
-                size <= mean_size + threshold*stddev_size {
-            bins.entry("lf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq <= freq_low_limit) && 
+                (size <= size_low_limit) {
+            bins.entry("lf_ls".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //mf_ls
-        else if freq < mean_freq + threshold*stddev_freq && freq > mean_freq - threshold*stddev_freq && 
-                size <= mean_size + threshold*stddev_size {
-            bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq < freq_high_limit) && (freq > freq_low_limit) && 
+                (size <= size_low_limit) {
+            bins.entry("mf_ls".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
 
         //hf_ls
-        else if freq >= mean_freq + threshold*stddev_freq && 
-                size <= mean_size + threshold*stddev_size {
-            bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq >= freq_high_limit) && 
+                (size <= size_low_limit) {
+            bins.entry("hf_ls".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
         }
     }
 
@@ -507,14 +518,17 @@ fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, thresh
 fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU32, prior_builds_metadata: &'a Option<Vec<Vec<Vec<String>>>>) -> Vec<ChunkedComponents<'a>> {
     let mut r = Vec::new();
     let mut components: Vec<_> = components.iter().collect();
+    let before_processing_pkgs_len = components.len();
     components.sort_by(|a, b| a.meta.change_frequency.cmp(&b.meta.change_frequency));
-    assert!(&components[0].meta.change_frequency <= &components[1].meta.change_frequency);
-    println!("Components len before max: {}", &components.len());
-    //Fix removing the freq u32::max comps from components and addding to max_freq_components
-    let mut max_freq_components: Vec<&ObjectSourceMetaSized> = vec!(components[components.len() -1], components[components.len() - 2]); 
-    components.retain(|pkg| pkg.meta.change_frequency != u32::MAX);
-    println!("max_freq len after: {}", &max_freq_components.len());
-    println!("Comp len after: {}", &components.len());
+    let mut max_freq_components: Vec<&ObjectSourceMetaSized> = Vec::new();
+    components.retain(|pkg| {
+        let retain: bool = pkg.meta.change_frequency != u32::MAX;
+        if !retain {
+            max_freq_components.push(pkg);
+        } 
+        retain
+    });
+    let max_freq_len = max_freq_components.len();
     let partitions = get_partitions_with_threshold(components, 1.5).expect("Partitioning components into sets");
     for pkgs in partitions.values() {
         let max_bin_size: u64 = pkgs.iter().map(|a| a.size).max().unwrap();
@@ -543,12 +557,20 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
                 bin_start_index = i + 1; 
             }
 
-            if i == pkgs.len() - 1 {
+            if i == pkgs.len() - 1 && bin.len() != 0 {
                 r.push(bin.clone());
+                bin.clear();
             }
         }
     }
     r.push(max_freq_components);
+    let mut after_processing_pkgs_len = 0;
+    r.iter().for_each(|bin| {
+        after_processing_pkgs_len += bin.len();
+    });
+    assert!(after_processing_pkgs_len == before_processing_pkgs_len);
+    //Find a way of confining bins <= max.size
+    //maybe join two bins
     assert!(r.len() <= bin_size.get() as usize);
     r
 }
