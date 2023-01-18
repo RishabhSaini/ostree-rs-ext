@@ -436,12 +436,12 @@ fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, thresh
 
     let mut freq_low_limit = mean_freq - threshold*stddev_freq;
     if freq_low_limit < 0 as f64 {
-        freq_low_limit = 0 as f64;
+        freq_low_limit = 1 as f64;
     }
     let freq_high_limit = mean_freq + threshold*stddev_freq;
     let mut size_low_limit = mean_size - threshold*stddev_size;
     if size_low_limit < 0 as f64 {
-        size_low_limit = 0 as f64;
+        size_low_limit = 100000 as f64;
     }
     let size_high_limit = mean_size + threshold*stddev_size;
     
@@ -563,14 +563,32 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
             }
         }
     }
+
+    println!("Bins before unoptimized build: {}", r.len());
+    while r.len() > (bin_size.get() - 1) as usize {
+        for i in (1..r.len() - 1).step_by(2).rev() {
+            if r.len() <= (bin_size.get() - 1) as usize {
+                break;          
+            }
+            let prev = &r[i-1];
+            let curr = &r[i];
+            let mut merge: Vec<&ObjectSourceMetaSized> = Vec::new();
+            merge.extend(prev.into_iter());
+            merge.extend(curr.into_iter());
+            r.remove(i);
+            r.remove(i-1);
+            r.insert(i, merge);
+        }
+    }
+    println!("Bins after optimization: {}", r.len());
     r.push(max_freq_components);
     let mut after_processing_pkgs_len = 0;
     r.iter().for_each(|bin| {
         after_processing_pkgs_len += bin.len();
     });
     assert!(after_processing_pkgs_len == before_processing_pkgs_len);
-    //Find a way of confining bins <= max.size
-    //maybe join two bins
+    //Use the previous builds data to calculate difference in packaging. If more than 70% changed,
+    //shift packing structure otherwise make changes to adhere to it
     assert!(r.len() <= bin_size.get() as usize);
     r
 }
