@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::borrow::{Borrow, Cow};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashSet, HashMap};
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
@@ -315,8 +315,9 @@ impl Chunking {
             let first = bin[0];
             let first_name = &*first.meta.name;
             let name = match bin.len() {
-                0 => unreachable!(),
+                0 => Cow::Owned(format!("Reserved for new packages")),
                 1 => Cow::Borrowed(first_name),
+                //This code is reprinting the first name
                 2..=5 => {
                     let r = bin.iter().map(|v| &*v.meta.name).fold(
                         String::from(first_name),
@@ -326,7 +327,7 @@ impl Chunking {
                         },
                     );
                     Cow::Owned(r)
-                }
+                },
                 n => Cow::Owned(format!("{n} components")),
             };
             let mut chunk = Chunk::new(&*name);
@@ -425,14 +426,14 @@ fn std_deviation(data: &[u64]) -> Option<f64> {
     }
 }
 
-fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, threshold: f64) -> Option<HashMap<String, Vec<&ObjectSourceMetaSized>>>{
+fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, threshold: f64) -> Option<BTreeMap<String, Vec<&ObjectSourceMetaSized>>>{
     let frequencies: Vec<u64> = components.iter().map(|a| a.meta.change_frequency.into()).collect();
     let sizes: Vec<u64> = components.iter().map(|a| a.size).collect();
     let mean_freq = mean(&frequencies)?;
     let stddev_freq = std_deviation(&frequencies)?;
     let mean_size = mean(&sizes)?;
     let stddev_size = std_deviation(&sizes)?;
-    let mut bins : HashMap<String, Vec<&ObjectSourceMetaSized>> = HashMap::new();
+    let mut bins : BTreeMap<String, Vec<&ObjectSourceMetaSized>> = BTreeMap::new();
 
     let mut freq_low_limit = mean_freq - threshold*stddev_freq;
     if freq_low_limit < 0 as f64 {
@@ -515,9 +516,53 @@ fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, thresh
 /// and a number of bins (possible container layers) to use, determine which components
 /// go in which bin.  This algorithm is pretty simple:
 ///
-fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU32, prior_builds_metadata: &'a Option<Vec<Vec<Vec<String>>>>) -> Vec<ChunkedComponents<'a>> {
+fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU32, prior_build_metadata: &'a Option<Vec<Vec<String>>>) -> Vec<ChunkedComponents<'a>> {
     let mut r = Vec::new();
     let mut components: Vec<_> = components.iter().collect();
+
+    //Flatten out prior_build_metadata[i] to view all the packages in prior build as a single vec
+    //
+    //If the current rpm-ostree commit to be encapsulated is not the one in which packing structure changes, then
+    //  Compare flatten(prior_build_metadata[i]) to components to see if pkgs added, updated,
+    //  removed or kept same
+    //  if pkgs added, then add them to the last bin of prior[i][n]
+    //  if pkgs removed, then remove them from the prior[i]
+    //  iterate through prior[i] and make bins according to the name in nevra of pkgs and return
+    //  (no need of recomputing packaging structure)
+    //else if pkg structure to be changed || prior build not specified
+    //  Recompute optimal packaging strcuture (Compute partitions, place packages and optimize build) 
+    
+    if let Some(prior_build) = prior_build_metadata /* && structure not be changed*/ {
+        println!("Keeping old package structure");
+        let mut curr_build: Vec<Vec<String>> = prior_build.clone();
+        let mut prev_pkgs: Vec<String> = Vec::new();
+        for bin in prior_build {
+            for pkg in bin {
+                prev_pkgs.push(pkg.to_string());
+            }
+        }
+        let curr_pkgs: Vec<String> = components.iter().map(|pkg| pkg.meta.name.to_string()).collect();
+        let prev_pkgs_set: HashSet<String> = HashSet::from_iter(prev_pkgs);
+        let curr_pkgs_set: HashSet<String> = HashSet::from_iter(curr_pkgs);
+        let added: HashSet<&String> = curr_pkgs_set.difference(&prev_pkgs_set).collect();
+        let removed: HashSet<&String> = prev_pkgs_set.difference(&curr_pkgs_set).collect();
+        let mut add_pkgs_v: Vec<String> = Vec::new();
+        for pkg in added {
+            add_pkgs_v.push(pkg.to_string());
+        }
+        let mut rem_pkgs_v: Vec<String> = Vec::new();
+        for pkg in removed {
+            rem_pkgs_v.push(pkg.to_string());
+        }
+        let curr_build_len = &curr_build.len();
+        curr_build[curr_build_len - 1].extend(add_pkgs_v);
+        for mut bin in curr_build {
+            bin.retain(|pkg| !rem_pkgs_v.contains(&pkg));
+        }
+        let mut modified_build: Vec<Vec<ObjectSourceMetaSized>> = Vec::new();
+    }
+
+    println!("Creating new packing structure");
     let before_processing_pkgs_len = components.len();
     components.sort_by(|a, b| a.meta.change_frequency.cmp(&b.meta.change_frequency));
     let mut max_freq_components: Vec<&ObjectSourceMetaSized> = Vec::new();
@@ -565,9 +610,12 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
     }
 
     println!("Bins before unoptimized build: {}", r.len());
-    while r.len() > (bin_size.get() - 1) as usize {
+    //Leave second last bin for max_freq_components
+    //Leave last bin for new packages added, so to not disturb
+    //previous bins.
+    while r.len() > (bin_size.get() - 2) as usize {
         for i in (1..r.len() - 1).step_by(2).rev() {
-            if r.len() <= (bin_size.get() - 1) as usize {
+            if r.len() <= (bin_size.get() - 2) as usize {
                 break;          
             }
             let prev = &r[i-1];
@@ -582,13 +630,13 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
     }
     println!("Bins after optimization: {}", r.len());
     r.push(max_freq_components);
+    let new_pkgs_bin: Vec<&ObjectSourceMetaSized> = Vec::new();
+    r.push(new_pkgs_bin);
     let mut after_processing_pkgs_len = 0;
     r.iter().for_each(|bin| {
         after_processing_pkgs_len += bin.len();
     });
     assert!(after_processing_pkgs_len == before_processing_pkgs_len);
-    //Use the previous builds data to calculate difference in packaging. If more than 70% changed,
-    //shift packing structure otherwise make changes to adhere to it
     assert!(r.len() <= bin_size.get() as usize);
     r
 }
