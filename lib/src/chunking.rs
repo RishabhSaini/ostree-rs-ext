@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::borrow::{Borrow, Cow};
-use std::collections::{BTreeMap, BTreeSet, HashSet, HashMap};
-use std::fmt::Write;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -31,7 +30,7 @@ pub(crate) struct Chunk {
     pub(crate) name: String,
     pub(crate) content: ChunkMapping,
     pub(crate) size: u64,
-    pub(crate) packages: Vec<String>
+    pub(crate) packages: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -260,7 +259,7 @@ impl Chunking {
         rev: &str,
         meta: ObjectMetaSized,
         max_layers: &Option<NonZeroU32>,
-        prior_build_metadata: &Option<Vec<Vec<String>>>
+        prior_build_metadata: &Option<Vec<Vec<String>>>,
     ) -> Result<Self> {
         let mut r = Self::new(repo, rev)?;
         r.process_mapping(meta, max_layers, prior_build_metadata)?;
@@ -278,7 +277,7 @@ impl Chunking {
         &mut self,
         meta: ObjectMetaSized,
         max_layers: &Option<NonZeroU32>,
-        prior_build_metadata: &Option<Vec<Vec<String>>>
+        prior_build_metadata: &Option<Vec<Vec<String>>>,
     ) -> Result<()> {
         self.max = max_layers
             .unwrap_or(NonZeroU32::new(MAX_CHUNKS).unwrap())
@@ -309,16 +308,20 @@ impl Chunking {
             .unwrap();
 
         // TODO: Compute bin packing in a better way
-        let packing = basic_packing(sizes, NonZeroU32::new(self.max).unwrap(), prior_build_metadata);
+        let packing = basic_packing(
+            sizes,
+            NonZeroU32::new(self.max).unwrap(),
+            prior_build_metadata,
+        );
 
         for bin in packing.into_iter() {
             let name = match bin.len() {
                 0 => Cow::Owned(format!("Reserved for new packages")),
-                1 =>    {
-                            let first = bin[0];
-                            let first_name = &*first.meta.name;
-                            Cow::Borrowed(first_name)
-                        },
+                1 => {
+                    let first = bin[0];
+                    let first_name = &*first.meta.name;
+                    Cow::Borrowed(first_name)
+                }
                 //This code is reprinting the first name
                 /*
                 2..=5 => {
@@ -341,9 +344,7 @@ impl Chunking {
                     self.remainder.move_obj(&mut chunk, obj.as_str());
                 }
             }
-            if !chunk.content.is_empty() {
-                self.chunks.push(chunk);
-            }
+            self.chunks.push(chunk);
         }
 
         assert_eq!(self.remainder.content.len(), 0);
@@ -390,22 +391,10 @@ impl Chunking {
 
 type ChunkedComponents<'a> = Vec<&'a ObjectSourceMetaSized>;
 
-fn components_size(components: &[&ObjectSourceMetaSized]) -> u64 {
-    components.iter().map(|k| k.size).sum()
-}
-
 /// Compute the total size of a packing
 #[cfg(test)]
 fn packing_size(packing: &[ChunkedComponents]) -> u64 {
     packing.iter().map(|v| components_size(v)).sum()
-}
-
-fn sort_packing(packing: &mut [ChunkedComponents]) {
-    packing.sort_by(|a, b| {
-        let a: u64 = components_size(a);
-        let b: u64 = components_size(b);
-        b.cmp(&a)
-    });
 }
 
 fn mean(data: &[u64]) -> Option<f64> {
@@ -413,99 +402,114 @@ fn mean(data: &[u64]) -> Option<f64> {
     let count = data.len();
     match count {
         positive if positive > 0 => Some(sum / count as f64),
-         _ => None,
+        _ => None,
     }
 }
 
 fn std_deviation(data: &[u64]) -> Option<f64> {
     match (mean(data), data.len()) {
         (Some(data_mean), count) if count > 0 => {
-            let variance = data.iter().map(|value| {
-                let diff = data_mean - (*value as f64);
-                diff * diff
-            }).sum::<f64>() / count as f64;
+            let variance = data
+                .iter()
+                .map(|value| {
+                    let diff = data_mean - (*value as f64);
+                    diff * diff
+                })
+                .sum::<f64>()
+                / count as f64;
             Some(variance.sqrt())
-        },
-        _ => None
+        }
+        _ => None,
     }
 }
 
-fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, threshold: f64) -> Option<BTreeMap<String, Vec<&ObjectSourceMetaSized>>>{
-    let frequencies: Vec<u64> = components.iter().map(|a| a.meta.change_frequency.into()).collect();
+fn get_partitions_with_threshold(
+    components: Vec<&ObjectSourceMetaSized>,
+    threshold: f64,
+) -> Option<BTreeMap<String, Vec<&ObjectSourceMetaSized>>> {
+    let frequencies: Vec<u64> = components
+        .iter()
+        .map(|a| a.meta.change_frequency.into())
+        .collect();
     let sizes: Vec<u64> = components.iter().map(|a| a.size).collect();
     let mean_freq = mean(&frequencies)?;
     let stddev_freq = std_deviation(&frequencies)?;
     let mean_size = mean(&sizes)?;
     let stddev_size = std_deviation(&sizes)?;
-    let mut bins : BTreeMap<String, Vec<&ObjectSourceMetaSized>> = BTreeMap::new();
+    let mut bins: BTreeMap<String, Vec<&ObjectSourceMetaSized>> = BTreeMap::new();
 
-    let mut freq_low_limit = mean_freq - threshold*stddev_freq;
+    let mut freq_low_limit = mean_freq - threshold * stddev_freq;
     if freq_low_limit < 0 as f64 {
         freq_low_limit = 1 as f64;
     }
-    let freq_high_limit = mean_freq + threshold*stddev_freq;
-    let mut size_low_limit = mean_size - threshold*stddev_size;
+    let freq_high_limit = mean_freq + threshold * stddev_freq;
+    let mut size_low_limit = mean_size - threshold * stddev_size;
     if size_low_limit < 0 as f64 {
         size_low_limit = 100000 as f64;
     }
-    let size_high_limit = mean_size + threshold*stddev_size;
-    
+    let size_high_limit = mean_size + threshold * stddev_size;
+
     for pkg in components {
         let size = pkg.size as f64;
         let freq = pkg.meta.change_frequency as f64;
-        
+
         //lf_hs
-        if  (freq <= freq_low_limit) && 
-            (size >= size_high_limit) {
-            bins.entry("lf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        if (freq <= freq_low_limit) && (size >= size_high_limit) {
+            bins.entry("lf_hs".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //mf_hs
-        else if (freq < freq_high_limit) && (freq > freq_low_limit) && 
-                (size >= size_high_limit) {
-            bins.entry("mf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq < freq_high_limit) && (freq > freq_low_limit) && (size >= size_high_limit) {
+            bins.entry("mf_hs".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //hf_hs
-        else if (freq >= freq_high_limit) && 
-                (size >= size_high_limit) {
-            bins.entry("hf_hs".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq >= freq_high_limit) && (size >= size_high_limit) {
+            bins.entry("hf_hs".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //lf_ms
-        else if (freq <= freq_low_limit) && 
-                (size < size_high_limit) && (size > size_low_limit) {
-            bins.entry("lf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq <= freq_low_limit) && (size < size_high_limit) && (size > size_low_limit) {
+            bins.entry("lf_ms".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //mf_ms
-        else if (freq < freq_high_limit) && (freq > freq_low_limit) && 
-                (size < size_high_limit) && (size > size_low_limit){
-            bins.entry("mf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq < freq_high_limit)
+            && (freq > freq_low_limit)
+            && (size < size_high_limit)
+            && (size > size_low_limit)
+        {
+            bins.entry("mf_ms".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //hf_ms
-        else if (freq >= freq_high_limit) && 
-                (size < size_high_limit) && (size > size_low_limit) {
-            bins.entry("hf_ms".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq >= freq_high_limit) && (size < size_high_limit) && (size > size_low_limit) {
+            bins.entry("hf_ms".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-        
         //lf_ls
-        else if (freq <= freq_low_limit) && 
-                (size <= size_low_limit) {
-            bins.entry("lf_ls".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq <= freq_low_limit) && (size <= size_low_limit) {
+            bins.entry("lf_ls".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //mf_ls
-        else if (freq < freq_high_limit) && (freq > freq_low_limit) && 
-                (size <= size_low_limit) {
-            bins.entry("mf_ls".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq < freq_high_limit) && (freq > freq_low_limit) && (size <= size_low_limit) {
+            bins.entry("mf_ls".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
-
         //hf_ls
-        else if (freq >= freq_high_limit) && 
-                (size <= size_low_limit) {
-            bins.entry("hf_ls".to_string()).and_modify(|bin| bin.push(pkg)).or_insert(vec!(pkg));
+        else if (freq >= freq_high_limit) && (size <= size_low_limit) {
+            bins.entry("hf_ls".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
         }
     }
 
@@ -520,7 +524,11 @@ fn get_partitions_with_threshold(components: Vec<&ObjectSourceMetaSized>, thresh
 /// and a number of bins (possible container layers) to use, determine which components
 /// go in which bin.  This algorithm is pretty simple:
 ///
-fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU32, prior_build_metadata: &'a Option<Vec<Vec<String>>>) -> Vec<ChunkedComponents<'a>> {
+fn basic_packing<'a>(
+    components: &'a [ObjectSourceMetaSized],
+    bin_size: NonZeroU32,
+    prior_build_metadata: &'a Option<Vec<Vec<String>>>,
+) -> Vec<ChunkedComponents<'a>> {
     let mut r = Vec::new();
     let mut components: Vec<_> = components.iter().collect();
 
@@ -534,9 +542,11 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
     //  iterate through prior[i] and make bins according to the name in nevra of pkgs and return
     //  (no need of recomputing packaging structure)
     //else if pkg structure to be changed || prior build not specified
-    //  Recompute optimal packaging strcuture (Compute partitions, place packages and optimize build) 
-    
-    if let Some(prior_build) = prior_build_metadata /* && structure not be changed*/ {
+    //  Recompute optimal packaging strcuture (Compute partitions, place packages and optimize build)
+
+    if let Some(prior_build) = prior_build_metadata
+    /* && structure not be changed*/
+    {
         println!("Keeping old package structure");
         let mut curr_build: Vec<Vec<String>> = prior_build.clone();
         let mut prev_pkgs: Vec<String> = Vec::new();
@@ -545,7 +555,10 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
                 prev_pkgs.push(pkg.to_string());
             }
         }
-        let curr_pkgs: Vec<String> = components.iter().map(|pkg| pkg.meta.name.to_string()).collect();
+        let curr_pkgs: Vec<String> = components
+            .iter()
+            .map(|pkg| pkg.meta.name.to_string())
+            .collect();
         let prev_pkgs_set: HashSet<String> = HashSet::from_iter(prev_pkgs);
         let curr_pkgs_set: HashSet<String> = HashSet::from_iter(curr_pkgs);
         let added: HashSet<&String> = curr_pkgs_set.difference(&prev_pkgs_set).collect();
@@ -560,12 +573,14 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
         }
         let curr_build_len = &curr_build.len();
         curr_build[curr_build_len - 1].extend(add_pkgs_v);
-        for mut bin in curr_build.iter_mut() {
+        for bin in curr_build.iter_mut() {
             bin.retain(|pkg| !rem_pkgs_v.contains(&pkg));
         }
-        let mut name_to_component : HashMap<String, &ObjectSourceMetaSized> = HashMap::new();
+        let mut name_to_component: HashMap<String, &ObjectSourceMetaSized> = HashMap::new();
         for component in &components {
-            name_to_component.entry(component.meta.name.to_string()).or_insert(component);
+            name_to_component
+                .entry(component.meta.name.to_string())
+                .or_insert(component);
         }
         let mut modified_build: Vec<Vec<&ObjectSourceMetaSized>> = Vec::new();
         for bin in curr_build {
@@ -586,21 +601,21 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
         let retain: bool = pkg.meta.change_frequency != u32::MAX;
         if !retain {
             max_freq_components.push(pkg);
-        } 
+        }
         retain
     });
-    let max_freq_len = max_freq_components.len();
-    let partitions = get_partitions_with_threshold(components, 1.5).expect("Partitioning components into sets");
+    let partitions =
+        get_partitions_with_threshold(components, 1.5).expect("Partitioning components into sets");
     for pkgs in partitions.values() {
         let max_bin_size: u64 = pkgs.iter().map(|a| a.size).max().unwrap();
         let mut bin_size = 0;
-        let mut bin : Vec<&ObjectSourceMetaSized> = Vec::new();
-        //Index of pkg in pkgs where the bin begins 
-        let mut bin_start_index = 0;
-        for (i, pkg) in pkgs.iter().enumerate(){
+        let mut bin: Vec<&ObjectSourceMetaSized> = Vec::new();
+        //Index of pkg in pkgs where the bin begins
+        let mut _bin_start_index = 0;
+        for (i, pkg) in pkgs.iter().enumerate() {
             let size_pkg = pkg.size;
             bin_size += size_pkg;
-            bin.push(pkg); 
+            bin.push(pkg);
 
             if bin_size > max_bin_size {
                 bin.pop();
@@ -608,14 +623,12 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
                 bin.clear();
                 bin.push(pkg);
                 bin_size = pkg.size;
-                bin_start_index = i;
-            }
-
-            else if bin_size == max_bin_size {
+                _bin_start_index = i;
+            } else if bin_size == max_bin_size {
                 r.push(bin.clone());
                 bin_size = 0;
                 bin.clear();
-                bin_start_index = i + 1; 
+                _bin_start_index = i + 1;
             }
 
             if i == pkgs.len() - 1 && bin.len() != 0 {
@@ -632,15 +645,15 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
     while r.len() > (bin_size.get() - 2) as usize {
         for i in (1..r.len() - 1).step_by(2).rev() {
             if r.len() <= (bin_size.get() - 2) as usize {
-                break;          
+                break;
             }
-            let prev = &r[i-1];
+            let prev = &r[i - 1];
             let curr = &r[i];
             let mut merge: Vec<&ObjectSourceMetaSized> = Vec::new();
             merge.extend(prev.into_iter());
             merge.extend(curr.into_iter());
             r.remove(i);
-            r.remove(i-1);
+            r.remove(i - 1);
             r.insert(i, merge);
         }
     }

@@ -202,7 +202,7 @@ impl OciDir {
         config: &mut oci_image::ImageConfiguration,
         layer: Layer,
         description: &str,
-        annotations: Option<HashMap<String, String>>
+        annotations: Option<HashMap<String, String>>,
     ) {
         self.push_layer_annotated(manifest, config, layer, annotations, description);
     }

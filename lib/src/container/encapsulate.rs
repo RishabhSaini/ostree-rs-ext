@@ -157,12 +157,24 @@ fn export_chunked(
             // Add the ostree layer
             let mut annotation_ostree_layer = HashMap::new();
             annotation_ostree_layer.insert("Content".to_string(), "ostree_commit".to_string());
-            ociw.push_layer(manifest, imgcfg, ostree_layer, description, Some(annotation_ostree_layer));
+            ociw.push_layer(
+                manifest,
+                imgcfg,
+                ostree_layer,
+                description,
+                Some(annotation_ostree_layer),
+            );
             // Add the component/content layers
             for (layer, name, packages) in layers {
                 let mut annotation_component_layer = HashMap::new();
                 annotation_component_layer.insert("Content".to_string(), packages.join(","));
-                ociw.push_layer(manifest, imgcfg, layer, name.as_str(), Some(annotation_component_layer));
+                ociw.push_layer(
+                    manifest,
+                    imgcfg,
+                    layer,
+                    name.as_str(),
+                    Some(annotation_component_layer),
+                );
             }
             // This label (mentioned above) points to the last layer that is part of
             // the ostree commit.
@@ -219,7 +231,15 @@ fn build_oci(
     let mut manifest = ocidir::new_empty_manifest().build().unwrap();
 
     let chunking = contentmeta
-        .map(|meta| crate::chunking::Chunking::from_mapping(repo, commit, meta, &opts.max_layers, &opts.prior_build_metadata))
+        .map(|meta| {
+            crate::chunking::Chunking::from_mapping(
+                repo,
+                commit,
+                meta,
+                &opts.max_layers,
+                &opts.prior_build_metadata,
+            )
+        })
         .transpose()?;
     // If no chunking was provided, create a logical single chunk.
     let chunking = chunking
