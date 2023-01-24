@@ -312,12 +312,15 @@ impl Chunking {
         let packing = basic_packing(sizes, NonZeroU32::new(self.max).unwrap(), prior_build_metadata);
 
         for bin in packing.into_iter() {
-            let first = bin[0];
-            let first_name = &*first.meta.name;
             let name = match bin.len() {
                 0 => Cow::Owned(format!("Reserved for new packages")),
-                1 => Cow::Borrowed(first_name),
+                1 =>    {
+                            let first = bin[0];
+                            let first_name = &*first.meta.name;
+                            Cow::Borrowed(first_name)
+                        },
                 //This code is reprinting the first name
+                /*
                 2..=5 => {
                     let r = bin.iter().map(|v| &*v.meta.name).fold(
                         String::from(first_name),
@@ -328,6 +331,7 @@ impl Chunking {
                     );
                     Cow::Owned(r)
                 },
+                */
                 n => Cow::Owned(format!("{n} components")),
             };
             let mut chunk = Chunk::new(&*name);
@@ -556,10 +560,22 @@ fn basic_packing<'a>(components: &'a [ObjectSourceMetaSized], bin_size: NonZeroU
         }
         let curr_build_len = &curr_build.len();
         curr_build[curr_build_len - 1].extend(add_pkgs_v);
-        for mut bin in curr_build {
+        for mut bin in curr_build.iter_mut() {
             bin.retain(|pkg| !rem_pkgs_v.contains(&pkg));
         }
-        let mut modified_build: Vec<Vec<ObjectSourceMetaSized>> = Vec::new();
+        let mut name_to_component : HashMap<String, &ObjectSourceMetaSized> = HashMap::new();
+        for component in &components {
+            name_to_component.entry(component.meta.name.to_string()).or_insert(component);
+        }
+        let mut modified_build: Vec<Vec<&ObjectSourceMetaSized>> = Vec::new();
+        for bin in curr_build {
+            let mut mod_bin = Vec::new();
+            for pkg in bin {
+                mod_bin.push(name_to_component[&pkg]);
+            }
+            modified_build.push(mod_bin);
+        }
+        return modified_build;
     }
 
     println!("Creating new packing structure");
