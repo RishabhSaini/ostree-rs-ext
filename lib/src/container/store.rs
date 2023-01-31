@@ -317,7 +317,7 @@ pub fn manifest_digest_from_commit(commit: &glib::Variant) -> Result<String> {
 /// Given a target diffid, return its corresponding layer.  In our current model,
 /// we require a 1-to-1 mapping between the two up until the ostree level.
 /// For a bit more information on this, see https://github.com/opencontainers/image-spec/blob/main/config.md
-fn layer_from_diffid<'a>(
+pub fn layer_from_diffid<'a>(
     layout: ExportLayout,
     manifest: &'a ImageManifest,
     config: &ImageConfiguration,

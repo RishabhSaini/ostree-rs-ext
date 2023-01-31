@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::{Instant};
 
 use crate::objectsource::{ContentID, ObjectMeta, ObjectMetaMap, ObjectSourceMeta};
 use crate::objgv::*;
@@ -444,12 +444,12 @@ fn get_partitions_with_threshold(
 
     let mut freq_low_limit = mean_freq - threshold * stddev_freq;
     if freq_low_limit < 0 as f64 {
-        freq_low_limit = 1 as f64;
+        freq_low_limit = 2 as f64;
     }
     let freq_high_limit = mean_freq + threshold * stddev_freq;
     let mut size_low_limit = mean_size - threshold * stddev_size;
     if size_low_limit < 0 as f64 {
-        size_low_limit = 100000 as f64;
+        size_low_limit = 22500 as f64;
     }
     let size_high_limit = mean_size + threshold * stddev_size;
 
@@ -535,7 +535,7 @@ fn basic_packing<'a>(
 ) -> Vec<ChunkedComponents<'a>> {
     let mut r = Vec::new();
     let mut components: Vec<_> = components.iter().collect();
-
+    let before_processing_pkgs_len = components.len();
     //Flatten out prior_build_metadata[i] to view all the packages in prior build as a single vec
     //
     //If the current rpm-ostree commit to be encapsulated is not the one in which packing structure changes, then
@@ -553,12 +553,15 @@ fn basic_packing<'a>(
     {
         println!("Keeping old package structure");
         let mut curr_build: Vec<Vec<String>> = prior_build.clone();
+        //Packing only manaages RPMs not OStree commit
+        curr_build.remove(0);
         let mut prev_pkgs: Vec<String> = Vec::new();
-        for bin in prior_build {
+        for bin in &curr_build {
             for pkg in bin {
                 prev_pkgs.push(pkg.to_string());
             }
         }
+        prev_pkgs.retain(|name| name != "");
         let curr_pkgs: Vec<String> = components
             .iter()
             .map(|pkg| pkg.meta.name.to_string())
@@ -576,6 +579,7 @@ fn basic_packing<'a>(
             rem_pkgs_v.push(pkg.to_string());
         }
         let curr_build_len = &curr_build.len();
+        curr_build[curr_build_len - 1].retain(|name| name != "");
         curr_build[curr_build_len - 1].extend(add_pkgs_v);
         for bin in curr_build.iter_mut() {
             bin.retain(|pkg| !rem_pkgs_v.contains(&pkg));
@@ -594,11 +598,17 @@ fn basic_packing<'a>(
             }
             modified_build.push(mod_bin);
         }
+        let mut after_processing_pkgs_len = 0;
+        modified_build.iter().for_each(|bin| {
+            after_processing_pkgs_len += bin.len();
+        });
+        assert_eq!(after_processing_pkgs_len, before_processing_pkgs_len);
+        assert!(modified_build.len() <= bin_size.get() as usize);
         return modified_build;
     }
 
     println!("Creating new packing structure");
-    let before_processing_pkgs_len = components.len();
+    
     components.sort_by(|a, b| a.meta.change_frequency.cmp(&b.meta.change_frequency));
     let mut max_freq_components: Vec<&ObjectSourceMetaSized> = Vec::new();
     components.retain(|pkg| {
