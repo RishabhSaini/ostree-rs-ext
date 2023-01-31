@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::objectsource::{ContentID, ObjectMeta, ObjectMetaMap, ObjectSourceMeta};
 use crate::objgv::*;
@@ -308,18 +309,21 @@ impl Chunking {
             .unwrap();
 
         // TODO: Compute bin packing in a better way
+        let start = Instant::now();
         let packing = basic_packing(
             sizes,
             NonZeroU32::new(self.max).unwrap(),
             prior_build_metadata,
         );
+        let duration = start.elapsed();
+        println!("Time elapsed in packing: {:#?}", duration);
 
         for bin in packing.into_iter() {
             let name = match bin.len() {
                 0 => Cow::Owned(format!("Reserved for new packages")),
                 1 => {
                     let first = bin[0];
-                    let first_name = &*first.meta.name;
+                    let first_name = &*first.meta.identifier;
                     Cow::Borrowed(first_name)
                 }
                 //This code is reprinting the first name
@@ -665,7 +669,7 @@ fn basic_packing<'a>(
     r.iter().for_each(|bin| {
         after_processing_pkgs_len += bin.len();
     });
-    assert!(after_processing_pkgs_len == before_processing_pkgs_len);
+    assert_eq!(after_processing_pkgs_len, before_processing_pkgs_len);
     assert!(r.len() <= bin_size.get() as usize);
     r
 }
