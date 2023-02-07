@@ -444,38 +444,26 @@ fn get_partitions_with_threshold(
 
     let mut freq_low_limit = mean_freq - threshold * stddev_freq;
     if freq_low_limit < 0 as f64 {
-        freq_low_limit = 2 as f64;
+        freq_low_limit = 1 as f64;
     }
     let freq_high_limit = mean_freq + threshold * stddev_freq;
     let mut size_low_limit = mean_size - threshold * stddev_size;
     if size_low_limit < 0 as f64 {
-        size_low_limit = 22500 as f64;
+        size_low_limit = 100000 as f64;
     }
     let size_high_limit = mean_size + threshold * stddev_size;
-
+    
     for pkg in components {
         let size = pkg.size as f64;
         let freq = pkg.meta.change_frequency as f64;
 
-        //lf_hs
-        if (freq <= freq_low_limit) && (size >= size_high_limit) {
-            bins.entry("lf_hs".to_string())
+        //hs
+        if size >= size_high_limit {
+            bins.entry("1hs".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
-        //mf_hs
-        else if (freq < freq_high_limit) && (freq > freq_low_limit) && (size >= size_high_limit) {
-            bins.entry("mf_hs".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert(vec![pkg]);
-        }
-        //hf_hs
-        else if (freq >= freq_high_limit) && (size >= size_high_limit) {
-            bins.entry("hf_hs".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert(vec![pkg]);
-        }
-        //lf_ms
+        //lf_ms (0 freq)
         else if (freq <= freq_low_limit) && (size < size_high_limit) && (size > size_low_limit) {
             bins.entry("lf_ms".to_string())
                 .and_modify(|bin| bin.push(pkg))
@@ -487,6 +475,14 @@ fn get_partitions_with_threshold(
             && (size < size_high_limit)
             && (size > size_low_limit)
         {
+            //create logscale and insert accordingly [freq_low_limit, ..., freq_high_limit]
+            /*
+            if freq == 3.0 {
+                bins.entry("mf_ms_2".to_string())
+                    .and_modify(|bin| bin.push(pkg))
+                    .or_insert(vec![pkg]);
+            }
+            */
             bins.entry("mf_ms".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
@@ -497,21 +493,9 @@ fn get_partitions_with_threshold(
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
-        //lf_ls
-        else if (freq <= freq_low_limit) && (size <= size_low_limit) {
-            bins.entry("lf_ls".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert(vec![pkg]);
-        }
-        //mf_ls
-        else if (freq < freq_high_limit) && (freq > freq_low_limit) && (size <= size_low_limit) {
-            bins.entry("mf_ls".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert(vec![pkg]);
-        }
-        //hf_ls
-        else if (freq >= freq_high_limit) && (size <= size_low_limit) {
-            bins.entry("hf_ls".to_string())
+        //ls
+        else if size <= size_low_limit {
+            bins.entry("2ls".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
@@ -609,7 +593,7 @@ fn basic_packing<'a>(
 
     println!("Creating new packing structure");
     
-    components.sort_by(|a, b| a.meta.change_frequency.cmp(&b.meta.change_frequency));
+    components.sort_by(|a, b| b.size.cmp(&a.size));
     let mut max_freq_components: Vec<&ObjectSourceMetaSized> = Vec::new();
     components.retain(|pkg| {
         let retain: bool = pkg.meta.change_frequency != u32::MAX;
@@ -619,36 +603,34 @@ fn basic_packing<'a>(
         retain
     });
     let partitions =
-        get_partitions_with_threshold(components, 1.5).expect("Partitioning components into sets");
-    for pkgs in partitions.values() {
-        let max_bin_size: u64 = pkgs.iter().map(|a| a.size).max().unwrap();
-        let mut bin_size = 0;
-        let mut bin: Vec<&ObjectSourceMetaSized> = Vec::new();
-        //Index of pkg in pkgs where the bin begins
-        let mut _bin_start_index = 0;
-        for (i, pkg) in pkgs.iter().enumerate() {
-            let size_pkg = pkg.size;
-            bin_size += size_pkg;
-            bin.push(pkg);
-
-            if bin_size > max_bin_size {
-                bin.pop();
-                r.push(bin.clone());
-                bin.clear();
-                bin.push(pkg);
-                bin_size = pkg.size;
-                _bin_start_index = i;
-            } else if bin_size == max_bin_size {
-                r.push(bin.clone());
-                bin_size = 0;
-                bin.clear();
-                _bin_start_index = i + 1;
+        get_partitions_with_threshold(components, 0.5).expect("Partitioning components into sets");
+    let remaining_bins = bin_size.get() - 2 - (1 + partitions.get("1hs").expect("1hs").len()) as u32;
+    let mut left_bins = remaining_bins;
+    for partition in partitions.keys() {
+        let pkgs = partitions.get(partition).expect("hashset");
+        if partition == "1hs" {
+            for pkg in pkgs {
+                r.push(vec!(*pkg));
             }
-
-            if i == pkgs.len() - 1 && bin.len() != 0 {
-                r.push(bin.clone());
-                bin.clear();
+        }
+        else if partition == "2ls" {
+            let mut bin: Vec<&ObjectSourceMetaSized> = Vec::new();
+            for pkg in pkgs {
+                bin.push(*pkg);
             }
+            r.push(bin);
+        }
+        else {
+            let bins_alloted = (pkgs.len() as f32 / (before_processing_pkgs_len - partitions.get("1hs").expect("1hs").len() - partitions.get("2ls").expect("2ls").len()) as f32 * (remaining_bins) as f32) as u32;
+            for _i in 0..bins_alloted {
+                r.push(Vec::new());
+            }
+            for (i, pkg) in pkgs.iter().enumerate() {
+                //loop from (0 to bins_alloted) + bin_size - remaining
+                println!("Index: {:#?}", (i % bins_alloted as usize) + (bin_size.get() - 2 - left_bins) as usize);
+                r[(i % bins_alloted as usize) + (bin_size.get() - 2 - left_bins) as usize].push(pkg);
+            }
+            left_bins -= bins_alloted;
         }
     }
 
