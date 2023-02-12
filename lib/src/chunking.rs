@@ -431,22 +431,15 @@ fn get_partitions_with_threshold(
     components: Vec<&ObjectSourceMetaSized>,
     threshold: f64,
 ) -> Option<BTreeMap<String, Vec<&ObjectSourceMetaSized>>> {
-    let frequencies: Vec<u64> = components
-        .iter()
-        .map(|a| a.meta.change_frequency.into())
-        .collect();
+    
+    let mut bins: BTreeMap<String, Vec<&ObjectSourceMetaSized>> = BTreeMap::new();
+    let mut med_size: Vec<&ObjectSourceMetaSized> = Vec::new();
+
+    //Calculate Mean and Stddev for Size
     let sizes: Vec<u64> = components.iter().map(|a| a.size).collect();
-    let mean_freq = mean(&frequencies)?;
-    let stddev_freq = std_deviation(&frequencies)?;
     let mean_size = mean(&sizes)?;
     let stddev_size = std_deviation(&sizes)?;
-    let mut bins: BTreeMap<String, Vec<&ObjectSourceMetaSized>> = BTreeMap::new();
-
-    let mut freq_low_limit = mean_freq - threshold * stddev_freq;
-    if freq_low_limit < 0 as f64 {
-        freq_low_limit = 1 as f64;
-    }
-    let freq_high_limit = mean_freq + threshold * stddev_freq;
+    
     let mut size_low_limit = mean_size - threshold * stddev_size;
     if size_low_limit < 0 as f64 {
         size_low_limit = 100000 as f64;
@@ -455,7 +448,6 @@ fn get_partitions_with_threshold(
     
     for pkg in components {
         let size = pkg.size as f64;
-        let freq = pkg.meta.change_frequency as f64;
 
         //hs
         if size >= size_high_limit {
@@ -463,39 +455,94 @@ fn get_partitions_with_threshold(
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
-        //lf_ms (0 freq)
-        else if (freq <= freq_low_limit) && (size < size_high_limit) && (size > size_low_limit) {
+        
+        //ls
+        else if size <= size_low_limit {
+            bins.entry("2ls".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
+        }
+
+        //ms
+        else {
+			med_size.push(pkg);
+        }
+    }
+
+    let med_frequencies: Vec<u64> = med_size
+        .iter()
+        .map(|a| a.meta.change_frequency.into())
+        .collect();
+    let med_sizes: Vec<u64> = med_size.iter().map(|a| a.size).collect();
+    let med_mean_freq = mean(&med_frequencies)?;
+    let med_stddev_freq = std_deviation(&med_frequencies)?;
+    let med_mean_size = mean(&med_sizes)?;
+    let med_stddev_size = std_deviation(&med_sizes)?;
+
+    let med_freq_low_limit = med_mean_freq - threshold * med_stddev_freq;
+    let med_freq_high_limit = med_mean_freq + threshold * med_stddev_freq;
+    let med_size_low_limit = med_mean_size - threshold * med_stddev_size;
+    let med_size_high_limit = med_mean_size + threshold * med_stddev_size;
+
+    for pkg in med_size {
+        let size = pkg.size as f64;
+        let freq = pkg.meta.change_frequency as f64;
+
+        //lf_hs
+        if (freq <= med_freq_low_limit) && (size >= med_size_high_limit) {
+            bins.entry("lf_hs".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
+        }
+        //mf_hs
+        else if (freq < med_freq_high_limit) && (freq > med_freq_low_limit) && (size >= med_size_high_limit) {
+            bins.entry("mf_hs".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
+        }
+        //hf_hs
+        else if (freq >= med_freq_high_limit) && (size >= med_size_high_limit) {
+            bins.entry("hf_hs".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
+        }
+        //lf_ms
+        else if (freq <= med_freq_low_limit) && (size < med_size_high_limit) && (size > med_size_low_limit) {
             bins.entry("lf_ms".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
         //mf_ms
-        else if (freq < freq_high_limit)
-            && (freq > freq_low_limit)
-            && (size < size_high_limit)
-            && (size > size_low_limit)
+        else if (freq < med_freq_high_limit)
+            && (freq > med_freq_low_limit)
+            && (size < med_size_high_limit)
+            && (size > med_size_low_limit)
         {
-            //create logscale and insert accordingly [freq_low_limit, ..., freq_high_limit]
-            /*
-            if freq == 3.0 {
-                bins.entry("mf_ms_2".to_string())
-                    .and_modify(|bin| bin.push(pkg))
-                    .or_insert(vec![pkg]);
-            }
-            */
             bins.entry("mf_ms".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
         //hf_ms
-        else if (freq >= freq_high_limit) && (size < size_high_limit) && (size > size_low_limit) {
+        else if (freq >= med_freq_high_limit) && (size < med_size_high_limit) && (size > med_size_low_limit) {
             bins.entry("hf_ms".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
-        //ls
-        else if size <= size_low_limit {
-            bins.entry("2ls".to_string())
+        //lf_ls
+        else if (freq <= med_freq_low_limit) && (size <= med_size_low_limit) {
+            bins.entry("lf_ls".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
+        }
+        //mf_ls
+        else if (freq < med_freq_high_limit) && (freq > med_freq_low_limit) && (size <= med_size_low_limit) {
+            bins.entry("mf_ls".to_string())
+                .and_modify(|bin| bin.push(pkg))
+                .or_insert(vec![pkg]);
+        }
+        //hf_ls
+        else if (freq >= med_freq_high_limit) && (size <= med_size_low_limit) {
+            bins.entry("hf_ls".to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert(vec![pkg]);
         }
@@ -593,7 +640,7 @@ fn basic_packing<'a>(
 
     println!("Creating new packing structure");
     
-    components.sort_by(|a, b| b.size.cmp(&a.size));
+    components.sort_by(|a, b| a.meta.change_frequency.cmp(&b.meta.change_frequency));
     let mut max_freq_components: Vec<&ObjectSourceMetaSized> = Vec::new();
     components.retain(|pkg| {
         let retain: bool = pkg.meta.change_frequency != u32::MAX;
@@ -602,12 +649,20 @@ fn basic_packing<'a>(
         }
         retain
     });
+	let components_len_after_max_freq = components.len();
     let partitions =
         get_partitions_with_threshold(components, 0.5).expect("Partitioning components into sets");
+    // Max_bins -:
+    // 1 for max_freq
+    // 1 for new_pkgs 
+    // 1 for ls
+    // n for hs
+    // Left for ms
     let remaining_bins = bin_size.get() - 2 - (1 + partitions.get("1hs").expect("1hs").len()) as u32;
-    let mut left_bins = remaining_bins;
-    for partition in partitions.keys() {
-        let pkgs = partitions.get(partition).expect("hashset");
+    let pkg_per_bin_ms = (components_len_after_max_freq - partitions.get("1hs").expect("1hs").len() - partitions.get("2ls").expect("2ls").len())/remaining_bins as usize;
+    for partition in partitions.keys() { 
+		let pkgs = partitions.get(partition).expect("hashset");
+		
         if partition == "1hs" {
             for pkg in pkgs {
                 r.push(vec!(*pkg));
@@ -621,16 +676,21 @@ fn basic_packing<'a>(
             r.push(bin);
         }
         else {
-            let bins_alloted = (pkgs.len() as f32 / (before_processing_pkgs_len - partitions.get("1hs").expect("1hs").len() - partitions.get("2ls").expect("2ls").len()) as f32 * (remaining_bins) as f32) as u32;
-            for _i in 0..bins_alloted {
-                r.push(Vec::new());
-            }
+            let mut bin: Vec<&ObjectSourceMetaSized> = Vec::new(); 
             for (i, pkg) in pkgs.iter().enumerate() {
-                //loop from (0 to bins_alloted) + bin_size - remaining
-                println!("Index: {:#?}", (i % bins_alloted as usize) + (bin_size.get() - 2 - left_bins) as usize);
-                r[(i % bins_alloted as usize) + (bin_size.get() - 2 - left_bins) as usize].push(pkg);
-            }
-            left_bins -= bins_alloted;
+                if bin.len() < pkg_per_bin_ms {
+                    bin.push(*pkg);
+                }
+                else {
+                    r.push(bin.clone());
+                    bin.clear();
+                    bin.push(*pkg);
+                }
+				if i == pkgs.len() - 1 && bin.len() != 0 {
+                	r.push(bin.clone());
+                	bin.clear();
+            	}
+        	}
         }
     }
 
