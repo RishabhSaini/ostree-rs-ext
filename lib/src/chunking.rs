@@ -28,6 +28,9 @@ pub(crate) const MAX_CHUNKS: u32 = 64;
 type RcStr = Rc<str>;
 pub(crate) type ChunkMapping = BTreeMap<RcStr, (u64, Vec<Utf8PathBuf>)>;
 
+const LOW_PARTITION: &str = "2ls";
+const HIGH_PARTITION: &str = "1hs";
+
 #[derive(Debug, Default)]
 pub(crate) struct Chunk {
     pub(crate) name: String,
@@ -318,7 +321,7 @@ impl Chunking {
             prior_build_metadata,
         );
         let duration = start.elapsed();
-        println!("Time elapsed in packing: {:#?}", duration);
+        tracing::debug!("Time elapsed in packing: {:#?}", duration);
 
         for bin in packing.into_iter() {
             let name = match bin.len() {
@@ -443,7 +446,7 @@ fn get_partitions_with_threshold(
         //low size (ls)
         else if size <= size_low_limit {
             partitions
-                .entry("2ls".to_string())
+                .entry(LOW_PARTITION.to_string())
                 .and_modify(|bin| bin.push(pkg))
                 .or_insert_with(|| vec![pkg]);
         }
@@ -459,7 +462,7 @@ fn get_partitions_with_threshold(
 
     //Concatenate extra hs packages + med_sizes to keep it descending sorted
     remaining_pkgs.append(&mut med_size);
-    partitions.insert("1hs".to_string(), high_size);
+    partitions.insert(HIGH_PARTITION.to_string(), high_size);
 
     //Ascending sorted by frequency, so each partition within ms is freq sorted
     remaining_pkgs.sort_by(|a, b| {
@@ -489,89 +492,34 @@ fn get_partitions_with_threshold(
         let size = pkg.size as f64;
         let freq = pkg.meta.change_frequency as f64;
 
-        //low frequency, high size
-        if (freq <= med_freq_low_limit) && (size >= med_size_high_limit) {
-            partitions
-                .entry("lf_hs".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
+        let size_name;
+        if size >= med_size_high_limit {
+            size_name = "hs";
+        } else if size <= med_size_low_limit {
+            size_name = "ls";
+        } else {
+            size_name = "ms";
         }
-        //medium frequency, high size
-        else if (freq < med_freq_high_limit)
-            && (freq > med_freq_low_limit)
-            && (size >= med_size_high_limit)
-        {
-            partitions
-                .entry("mf_hs".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
+
+        //Numbered to maintain order of partitions in a BTreeMap of hf, mf, lf
+        let freq_name;
+        if freq >= med_freq_high_limit {
+            freq_name = "3hf";
+        } else if freq <= med_freq_low_limit {
+            freq_name = "5lf";
+        } else {
+            freq_name = "4mf";
         }
-        //high frequency, high size
-        else if (freq >= med_freq_high_limit) && (size >= med_size_high_limit) {
-            partitions
-                .entry("hf_hs".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
-        //low frequency, medium size
-        else if (freq <= med_freq_low_limit)
-            && (size < med_size_high_limit)
-            && (size > med_size_low_limit)
-        {
-            partitions
-                .entry("lf_ms".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
-        //medium frequency, medium size
-        else if (freq < med_freq_high_limit)
-            && (freq > med_freq_low_limit)
-            && (size < med_size_high_limit)
-            && (size > med_size_low_limit)
-        {
-            partitions
-                .entry("mf_ms".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
-        //high frequency, medium size
-        else if (freq >= med_freq_high_limit)
-            && (size < med_size_high_limit)
-            && (size > med_size_low_limit)
-        {
-            partitions
-                .entry("hf_ms".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
-        //low frequency, low size
-        else if (freq <= med_freq_low_limit) && (size <= med_size_low_limit) {
-            partitions
-                .entry("lf_ls".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
-        //medium frequency, low size
-        else if (freq < med_freq_high_limit)
-            && (freq > med_freq_low_limit)
-            && (size <= med_size_low_limit)
-        {
-            partitions
-                .entry("mf_ls".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
-        //high frequency, low size
-        else if (freq >= med_freq_high_limit) && (size <= med_size_low_limit) {
-            partitions
-                .entry("hf_ls".to_string())
-                .and_modify(|bin| bin.push(pkg))
-                .or_insert_with(|| vec![pkg]);
-        }
+
+        let bucket = format!("{freq_name}_{size_name}");
+        partitions
+            .entry(bucket.to_string())
+            .and_modify(|bin| bin.push(pkg))
+            .or_insert_with(|| vec![pkg]);
     }
 
     for (name, pkgs) in &partitions {
-        println!("{:#?}: {:#?}", name, pkgs.len());
+        tracing::debug!("{:#?}: {:#?}", name, pkgs.len());
     }
 
     Some(partitions)
@@ -619,7 +567,7 @@ fn basic_packing<'a>(
     if let Some(prior_build) = prior_build_metadata
     /* && structure not be changed*/
     {
-        println!("Keeping old package structure");
+        tracing::debug!("Keeping old package structure");
         let mut curr_build: Vec<Vec<String>> = prior_build.clone();
         //Packing only manaages RPMs not OStree commit
         curr_build.remove(0);
@@ -642,15 +590,11 @@ fn basic_packing<'a>(
         for pkg in added {
             add_pkgs_v.push(pkg.to_string());
         }
-        let mut rem_pkgs_v: Vec<String> = Vec::new();
-        for pkg in removed {
-            rem_pkgs_v.push(pkg.to_string());
-        }
         let curr_build_len = &curr_build.len();
         curr_build[curr_build_len - 1].retain(|name| !name.is_empty());
         curr_build[curr_build_len - 1].extend(add_pkgs_v);
         for bin in curr_build.iter_mut() {
-            bin.retain(|pkg| !rem_pkgs_v.contains(pkg));
+            bin.retain(|pkg| !removed.contains(pkg));
         }
         let mut name_to_component: HashMap<String, &ObjectSourceMetaSized> = HashMap::new();
         for component in &components {
@@ -666,10 +610,7 @@ fn basic_packing<'a>(
             }
             modified_build.push(mod_bin);
         }
-        let mut after_processing_pkgs_len = 0;
-        modified_build.iter().for_each(|bin| {
-            after_processing_pkgs_len += bin.len();
-        });
+        let after_processing_pkgs_len: usize = modified_build.iter().map(|b| b.len()).sum();
         assert_eq!(after_processing_pkgs_len, before_processing_pkgs_len);
         assert!(modified_build.len() <= bin_size.get() as usize);
         return modified_build;
@@ -710,35 +651,25 @@ fn basic_packing<'a>(
                 get_partitions_with_threshold(components, limit_hs_bins as usize, 2f64)
                     .expect("Partitioning components into sets");
 
-            let limit_ls_pkgs = match partitions.get("2ls") {
+            let limit_ls_pkgs = match partitions.get(LOW_PARTITION) {
                 Some(n) => n.len(),
                 None => 0usize,
             };
 
             let pkg_per_bin_ms: usize =
-                match (components_len_after_max_freq - limit_hs_bins - limit_ls_pkgs)
+                (components_len_after_max_freq - limit_hs_bins - limit_ls_pkgs)
                     .checked_div(limit_ms_bins)
-                {
-                    Some(n) => {
-                        if n < 1 {
-                            panic!("Error: No of bins <= 3");
-                        }
-                        n
-                    }
-                    None => {
-                        panic!("Error: No of bins <= 3")
-                    }
-                };
+                    .expect("number of bins <= 3");
 
             //Bins assignment
             for partition in partitions.keys() {
                 let pkgs = partitions.get(partition).expect("hashset");
 
-                if partition == "1hs" {
+                if partition == HIGH_PARTITION {
                     for pkg in pkgs {
                         r.push(vec![*pkg]);
                     }
-                } else if partition == "2ls" {
+                } else if partition == LOW_PARTITION {
                     let mut bin: Vec<&ObjectSourceMetaSized> = Vec::new();
                     for pkg in pkgs {
                         bin.push(*pkg);
@@ -761,9 +692,17 @@ fn basic_packing<'a>(
                     }
                 }
             }
-            println!("Bins before unoptimized build: {}", r.len());
+            tracing::debug!("Bins before unoptimized build: {}", r.len());
 
-            //Addressing MS bins limit breach by wrapping MS layers
+            //Despite allocation certain number of pkgs per bin in MS partitions, the
+            //hard limit of number of MS bins can be exceeded. This is because the pkg_per_bin_ms
+            //is only upper limit and there is no lower limit. Thus, if a partition in MS has only 1 pkg
+            //but pkg_per_bin_ms > 1, then the entire bin will have 1 pkg. This prevents partition
+            //mixing.
+            //
+            //Addressing MS bins limit breach by mergin internal MS partitions
+            //The partitions in MS are merged beginnign from the end so to not mix hf bins with lf bins. The
+            //bins are kept in this order: hf, mf, lf by design.
             while r.len() > (bin_size.get() as usize - limit_new_bins - limit_max_frequency_bins) {
                 for i in (limit_ls_bins + limit_hs_bins..r.len() - 1)
                     .step_by(2)
@@ -784,7 +723,7 @@ fn basic_packing<'a>(
                     r.insert(i, merge);
                 }
             }
-            println!("Bins after optimization: {}", r.len());
+            tracing::debug!("Bins after optimization: {}", r.len());
         }
     }
     r.push(max_freq_components);
@@ -828,6 +767,13 @@ mod test {
         // And verify that the sizes match
         let packed_total_size = packing_size(&packing);
         assert_eq!(total_size, packed_total_size);
+        Ok(())
+    }
+
+    #[test]
+    fn test_advanced_packing() -> Result<()> {
+        //Initial
+        //Derived
         Ok(())
     }
 }
