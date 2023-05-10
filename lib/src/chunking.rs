@@ -549,9 +549,7 @@ fn basic_packing<'a>(
     let mut r = Vec::new();
     let mut components: Vec<_> = components.iter().collect();
     let before_processing_pkgs_len = components.len();
-    if before_processing_pkgs_len == 0 {
-        return Vec::new();
-    }
+
     //Flatten out prior_build_metadata[i] to view all the packages in prior build as a single vec
     //
     //If the current rpm-ostree commit to be encapsulated is not the one in which packing structure changes, then
@@ -618,6 +616,15 @@ fn basic_packing<'a>(
 
     println!("Creating new packing structure");
 
+    if before_processing_pkgs_len < bin_size.get() as usize {
+        components.into_iter().for_each(|pkg| r.push(vec![pkg]));
+        if before_processing_pkgs_len > 0 {
+            let new_pkgs_bin: Vec<&ObjectSourceMetaSized> = Vec::new();
+            r.push(new_pkgs_bin);
+        }
+        return r;
+    }
+
     let mut max_freq_components: Vec<&ObjectSourceMetaSized> = Vec::new();
     components.retain(|pkg| {
         let retain: bool = pkg.meta.change_frequency != u32::MAX;
@@ -634,19 +641,20 @@ fn basic_packing<'a>(
             let limit_ls_bins = 1usize;
             let limit_new_bins = 1usize;
             let _limit_new_pkgs = 0usize;
-            let limit_max_frequency_bins = 1usize;
-            let _limit_max_frequency_pkgs = max_freq_components.len();
+            let limit_max_frequency_pkgs = max_freq_components.len();
+            let limit_max_frequency_bins = if limit_max_frequency_pkgs > 0 {
+                1usize
+            } else {
+                0usize
+            };
             let limit_hs_bins = (0.6
                 * (bin_size.get()
                     - (limit_ls_bins + limit_new_bins + limit_max_frequency_bins) as u32)
                     as f32)
                 .floor() as usize;
-            let limit_ms_bins = (0.4
-                * (bin_size.get()
-                    - (limit_ls_bins + limit_new_bins + limit_max_frequency_bins) as u32)
-                    as f32)
-                .floor() as usize;
-
+            let limit_ms_bins = (bin_size.get()
+                - (limit_hs_bins + limit_ls_bins + limit_new_bins + limit_max_frequency_bins)
+                    as u32) as usize;
             let partitions =
                 get_partitions_with_threshold(components, limit_hs_bins as usize, 2f64)
                     .expect("Partitioning components into sets");
@@ -659,7 +667,7 @@ fn basic_packing<'a>(
             let pkg_per_bin_ms: usize =
                 (components_len_after_max_freq - limit_hs_bins - limit_ls_pkgs)
                     .checked_div(limit_ms_bins)
-                    .expect("number of bins <= 3");
+                    .expect("number of bins should be >= 4");
 
             //Bins assignment
             for partition in partitions.keys() {
@@ -726,7 +734,10 @@ fn basic_packing<'a>(
             tracing::debug!("Bins after optimization: {}", r.len());
         }
     }
-    r.push(max_freq_components);
+
+    if max_freq_components.len() > 0 {
+        r.push(max_freq_components);
+    }
 
     let new_pkgs_bin: Vec<&ObjectSourceMetaSized> = Vec::new();
     r.push(new_pkgs_bin);
@@ -773,7 +784,182 @@ mod test {
     #[test]
     fn test_advanced_packing() -> Result<()> {
         //Initial
+        let contentmeta_v0: Vec<ObjectSourceMetaSized> = vec![
+            //MAX_FREQ bin
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg1.0"),
+                    name: RcStr::from("pkg1"),
+                    srcid: RcStr::from("srcpkg1"),
+                    change_time_offset: 0,
+                    change_frequency: u32::MAX,
+                },
+                size: 100000,
+            },
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg2.0"),
+                    name: RcStr::from("pkg2"),
+                    srcid: RcStr::from("srcpkg2"),
+                    change_time_offset: 2417,
+                    change_frequency: u32::MAX,
+                },
+                size: 99999,
+            },
+            //HS Bins
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg3.0"),
+                    name: RcStr::from("pkg3"),
+                    srcid: RcStr::from("srcpkg3"),
+                    change_time_offset: 2417,
+                    change_frequency: 30,
+                },
+                size: 99998,
+            },
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg4.0"),
+                    name: RcStr::from("pkg4"),
+                    srcid: RcStr::from("srcpkg4"),
+                    change_time_offset: 2417,
+                    change_frequency: 100,
+                },
+                size: 99997,
+            },
+            //MS Bin
+
+            //lf_hs
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg10.0"),
+                    name: RcStr::from("pkg10"),
+                    srcid: RcStr::from("srcpkg10"),
+                    change_time_offset: 2417,
+                    change_frequency: 51,
+                },
+                size: 1000,
+            },
+            //mf_ms
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg8.0"),
+                    name: RcStr::from("pkg8"),
+                    srcid: RcStr::from("srcpkg8"),
+                    change_time_offset: 2417,
+                    change_frequency: 50,
+                },
+                size: 500,
+            },
+            //hf_ls
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg9.0"),
+                    name: RcStr::from("pkg9"),
+                    srcid: RcStr::from("srcpkg9"),
+                    change_time_offset: 2417,
+                    change_frequency: 1,
+                },
+                size: 200,
+            },
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg11.0"),
+                    name: RcStr::from("pkg11"),
+                    srcid: RcStr::from("srcpkg11"),
+                    change_time_offset: 2417,
+                    change_frequency: 100000,
+                },
+                size: 199,
+            },
+            //LS Bin
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg6.0"),
+                    name: RcStr::from("pkg6"),
+                    srcid: RcStr::from("srcpkg6"),
+                    change_time_offset: 2417,
+                    change_frequency: 30,
+                },
+                size: 2,
+            },
+            ObjectSourceMetaSized {
+                meta: ObjectSourceMeta {
+                    identifier: RcStr::from("pkg7.0"),
+                    name: RcStr::from("pkg7"),
+                    srcid: RcStr::from("srcpkg7"),
+                    change_time_offset: 2417,
+                    change_frequency: 30,
+                },
+                size: 1,
+            },
+        ];
+        let packing = basic_packing(
+            &contentmeta_v0.as_slice(),
+            NonZeroU32::new(6).unwrap(),
+            &None,
+        );
+        let structure: Vec<Vec<&str>> = packing
+            .iter()
+            .map(|bin| bin.iter().map(|pkg| &*pkg.meta.name).collect())
+            .collect();
+        let mut v0_expected_structure = vec![
+            vec![String::from("pkg3")],
+            vec![String::from("pkg4")],
+            vec![
+                String::from("pkg6"),
+                String::from("pkg7"),
+                String::from("pkg11"),
+            ],
+            vec![
+                String::from("pkg9"),
+                String::from("pkg8"),
+                String::from("pkg10"),
+            ],
+            vec![String::from("pkg1"), String::from("pkg2")],
+            vec![],
+        ];
+        assert_eq!(structure, v0_expected_structure);
+
         //Derived
+
+        let mut contentmeta_v1: Vec<ObjectSourceMetaSized> = contentmeta_v0;
+        //Upgrade pkg1.0 to 1.1
+        contentmeta_v1[0].meta.identifier = RcStr::from("pkg1.1");
+        //Remove pkg7
+        contentmeta_v1.remove(contentmeta_v1.len() - 1);
+        //Add pkg12
+        contentmeta_v1.push(ObjectSourceMetaSized {
+            meta: ObjectSourceMeta {
+                identifier: RcStr::from("pkg5.0"),
+                name: RcStr::from("pkg5"),
+                srcid: RcStr::from("srcpkg5"),
+                change_time_offset: 0,
+                change_frequency: 42,
+            },
+            size: 100000,
+        });
+        let mut metadata_with_ostree_commit = vec![vec![String::from("ostree_commit")]];
+        metadata_with_ostree_commit.append(&mut v0_expected_structure);
+        let s = Some(metadata_with_ostree_commit);
+        let packing_derived =
+            basic_packing(&contentmeta_v1.as_slice(), NonZeroU32::new(6).unwrap(), &s);
+        let structure_derived: Vec<Vec<&str>> = packing_derived
+            .iter()
+            .map(|bin| bin.iter().map(|pkg| &*pkg.meta.identifier).collect())
+            .collect();
+        assert_eq!(
+            structure_derived,
+            vec![
+                vec!["pkg3.0"],
+                vec!["pkg4.0"],
+                vec!["pkg6.0", "pkg11.0"],
+                vec!["pkg9.0", "pkg8.0", "pkg10.0"],
+                vec!["pkg1.1", "pkg2.0"],
+                vec!["pkg5.0"]
+            ]
+        );
+
         Ok(())
     }
 }

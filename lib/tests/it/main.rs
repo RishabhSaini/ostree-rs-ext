@@ -21,7 +21,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::process::Command;
 use std::time::SystemTime;
 
-use ostree_ext::fixture::{FileDef, Fixture, CONTENTS_CHECKSUM_V0, LAYERS_V0_LEN};
+use ostree_ext::fixture::{FileDef, Fixture, CONTENTS_CHECKSUM_V0, LAYERS_V0_LEN, PKGS_V0_LEN};
 
 const EXAMPLE_TAR_LAYER: &[u8] = include_bytes!("fixtures/hlinks.tar.gz");
 const TEST_REGISTRY_DEFAULT: &str = "localhost:5000";
@@ -474,6 +474,7 @@ async fn impl_test_container_import_export(chunked: bool) -> Result<()> {
     let opts = ExportOpts {
         copy_meta_keys: vec!["buildsys.checksum".to_string()],
         copy_meta_opt_keys: vec!["nosuchvalue".to_string()],
+        max_layers: std::num::NonZeroU32::new(PKGS_V0_LEN as u32),
         ..Default::default()
     };
     let digest = ostree_ext::container::encapsulate(

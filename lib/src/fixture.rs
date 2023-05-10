@@ -170,6 +170,7 @@ pub const CONTENTS_CHECKSUM_V0: &str =
     "5e41de82f9f861fa51e53ce6dd640a260e4fb29b7657f5a3f14157e93d2c0659";
 // 1 for ostree commit, 2 for max frequency packages, 3 as empty layer
 pub const LAYERS_V0_LEN: usize = 3usize;
+pub const PKGS_V0_LEN: usize = 7usize;
 
 #[derive(Debug, PartialEq, Eq)]
 enum SeLabel {
@@ -656,7 +657,10 @@ impl Fixture {
         let contentmeta = self.get_object_meta().context("Computing object meta")?;
         let contentmeta = ObjectMetaSized::compute_sizes(self.srcrepo(), contentmeta)
             .context("Computing sizes")?;
-        let opts = ExportOpts::default();
+        let opts = ExportOpts {
+            max_layers: std::num::NonZeroU32::new(PKGS_V0_LEN as u32),
+            ..Default::default()
+        };
         let digest = crate::container::encapsulate(
             self.srcrepo(),
             self.testref(),
