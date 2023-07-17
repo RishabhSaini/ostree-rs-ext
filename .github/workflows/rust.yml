@@ -181,3 +181,9 @@ jobs:
           name: ostree-ext-cli
       - name: Integration tests
         run: ./ci/container-build-integration.sh
+  tmate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
