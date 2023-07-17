@@ -85,6 +85,64 @@ systemd-run -dP --wait podman build -t localhost/fcos-derived .
 derived_img=oci:/var/tmp/derived.oci
 systemd-run -dP --wait skopeo copy containers-storage:localhost/fcos-derived "${derived_img}"
 
+# Verify policy
+cat > /etc/containers/registries.d/default.yaml << EOF
+docker:
+  quay.io/rh_ee_rsaini/coreos:
+    use-sigstore-attachments: true
+EOF
+
+cat > /etc/containers/policy.json << EOF
+{
+    "default": [
+        {
+            "type": "reject"
+        }
+    ],
+    "transports": {
+        "docker": {
+            "quay.io/fedora/fedora-coreos": [
+                {
+                    "type": "insecureAcceptAnything"
+                }
+            ],
+            "quay.io/rh_ee_rsaini/coreos": [
+                {
+                    "type": "sigstoreSigned",
+                    "keyPath": "/etc/pki/containers/fcos.pub",
+                    "signedIdentity": {
+                        "type": "matchRepository"
+                    }
+                }
+            ]
+
+        }
+    }
+}
+EOF
+mkdir repo
+ostree --repo=repo init --mode=bare
+mkdir -p /etc/pki/containers
+#Ensure Wrong Public Key fails
+cat > /etc/pki/containers/fcos.pub << EOF
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPw/TzXY5FQ00LT2orloOuAbqoOKv
+relAN0my/O8tziGvc16PtEhF6A7Eun0/9//AMRZ8BwLn2cORZiQsGd5adA==
+-----END PUBLIC KEY-----
+EOF
+ostree container image pull repo ostree-image-signed:docker://quay.io/rh_ee_rsaini/coreos 2> error
+test "$(grep -c "invalid signature" error)" -eq 1
+
+#Ensure Correct Public Key succeeds
+cat > /etc/pki/containers/fcos.pub << EOF
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEREpVb8t/Rp/78fawILAodC6EXGCG
+rWNjJoPo7J99cBu5Ui4oCKD+hAHagop7GTi/G3UBP/dtduy2BVdICuBETQ==
+-----END PUBLIC KEY-----
+EOF
+ostree container image pull repo ostree-image-signed:docker://quay.io/rh_ee_rsaini/coreos > out
+test "$(grep -c "Wrote: ostree-image-signed:docker://quay.io/rh_ee_rsaini/coreos" out)" -eq 1
+
 # Prune to reset state
 ostree refs ostree/container/image --delete
 
